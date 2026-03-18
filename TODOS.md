@@ -34,9 +34,15 @@
 **W3 - Transcript 解析脆弱：** 用 `grep -o` 抓 JSON 片段，遇到转义引号/复杂嵌套会误判。应改用 jq 解析增量 transcript 数据。
 **Effort:** M | **Priority:** P2
 
-**W4 - 热路径 fork 数优化：** ~~`$(run_module ...)` 每个模块一个 subshell，~~transcript 解析多次 grep/tail/wc 管道。考虑减少不必要的 fork。
-v0.2.1 已完成：删除 run_module，替换 wc/tr/head/tail 为 bash 内置，缓存 `date +%s`。剩余：render() 中 10+ 个 `$(module_xxx)` subshell 仍在。
-**Effort:** M | **Priority:** P2
+**W4 - 热路径 fork 数优化：** render() 中 12 个 `$(module_xxx)` subshell，每个 fork 约 2-5ms = 24-60ms 基础开销。改为模块写全局变量（如 `_OUT_model`），render() 直接拼接，消除所有 subshell fork。
+v0.2.1 已完成：删除 run_module，替换 wc/tr/head/tail 为 bash 内置，缓存 `date +%s`。
+**Effort:** M | **Priority:** P1
+
+**W5 - module_speed 标签误导：** `tok/s` 暗示速率，但实际只是 `msg_len / 4` 的静态 token 估算，没有时间维度。需要加入时间窗口计算或改标签。
+**Effort:** S | **Priority:** P2
+
+**W6 - _update_transcript_state cache hit 不填充 _TS_*：** cache hit 时（TTL 2s 内）直接 `return 0`，不从缓存读回 `_TS_*` 全局变量。每次 statusline 刷新是新进程，导致 transcript 模块每 2 秒周期内显示为空。修复：cache hit 时也从缓存文件读回 `_TS_*`。
+**Effort:** S | **Priority:** P2
 
 ## ~~README 清理~~ (已完成 - v0.2.0 README 重写)
 
