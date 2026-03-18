@@ -5,6 +5,10 @@ setup() {
   load_claude_lens
 }
 
+strip_ansi() {
+  printf '%s' "$1" | perl -pe 's/\e\[[0-9;]*[A-Za-z]//g'
+}
+
 # --- module_model ---
 
 @test "module_model displays model name" {
@@ -177,16 +181,17 @@ setup() {
 
 # --- module_usage ---
 
-@test "module_usage shows cached rate limits" {
+@test "module_usage shows remaining percentage" {
   setup_temp
   USAGE_CACHE_FILE="$TEST_CACHE_DIR/usage-cache"
   USAGE_LOCK_FILE="$TEST_CACHE_DIR/usage.lock"
+  # used: 5h=14%, 7d=5% → remaining: 5h=86%, 7d=95%
   echo "14|5" > "$USAGE_CACHE_FILE"
   run module_usage
   [[ "$output" == *"5h:"* ]]
-  [[ "$output" == *"14"* ]]
+  [[ "$output" == *"86%"* ]]
   [[ "$output" == *"7d:"* ]]
-  [[ "$output" == *"5"* ]]
+  [[ "$output" == *"95%"* ]]
 }
 
 @test "module_usage shows dashes when no cache" {
@@ -195,6 +200,141 @@ setup() {
   USAGE_LOCK_FILE="$TEST_CACHE_DIR/usage.lock"
   run module_usage
   [[ "$output" == *"--"* ]]
+}
+
+@test "module_usage shows deficit delta on 5h (red -N%)" {
+  setup_temp
+  USAGE_CACHE_FILE="$TEST_CACHE_DIR/usage-cache"
+  USAGE_LOCK_FILE="$TEST_CACHE_DIR/usage.lock"
+  # used: 5h=60%, 7d=15% → remaining: 5h=40%, 7d=85%
+  # 5h: expected_used=40%, reserve=40-60=-20 (deficit)
+  # 7d: expected_used=20%, reserve=20-15=+5 (within threshold)
+  echo "60|15|180|8000" > "$USAGE_CACHE_FILE"
+  run module_usage
+  local plain
+  plain=$(strip_ansi "$output")
+  printf '%s' "$plain" | grep -F "5h: 40% -20% (3h 0m)" > /dev/null
+  # 7d on-track, no delta
+  [[ "$plain" == *"7d: 85%"* ]]
+  [[ "$plain" != *"7d: 85% +"* ]]
+  [[ "$plain" != *"7d: 85% -"* ]]
+}
+
+@test "module_usage shows reserve delta on 7d (green +N%)" {
+  setup_temp
+  USAGE_CACHE_FILE="$TEST_CACHE_DIR/usage-cache"
+  USAGE_LOCK_FILE="$TEST_CACHE_DIR/usage.lock"
+  # used: 5h=40%, 7d=10% → remaining: 5h=60%, 7d=90%
+  # 5h: expected_used=40%, on-track
+  # 7d: expected_used=50%, reserve=50-10=+40 (green)
+  echo "40|10|180|5000" > "$USAGE_CACHE_FILE"
+  run module_usage
+  local plain
+  plain=$(strip_ansi "$output")
+  printf '%s' "$plain" | grep -F "5h: 60% (3h 0m)" > /dev/null
+  printf '%s' "$plain" | grep -F "7d: 90% +40%" > /dev/null
+}
+
+@test "module_usage handles old 3-field cache gracefully" {
+  setup_temp
+  USAGE_CACHE_FILE="$TEST_CACHE_DIR/usage-cache"
+  USAGE_LOCK_FILE="$TEST_CACHE_DIR/usage.lock"
+  echo "14|5|90" > "$USAGE_CACHE_FILE"
+  run module_usage
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"5h:"* ]]
+  [[ "$output" == *"7d:"* ]]
+}
+
+@test "module_usage handles 2-field cache gracefully" {
+  setup_temp
+  USAGE_CACHE_FILE="$TEST_CACHE_DIR/usage-cache"
+  USAGE_LOCK_FILE="$TEST_CACHE_DIR/usage.lock"
+  echo "14|5" > "$USAGE_CACHE_FILE"
+  run module_usage
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"5h:"* ]]
+  [[ "$output" == *"7d:"* ]]
+}
+
+@test "module_usage refreshes fresh legacy 3-field cache in background" {
+  setup_temp
+  USAGE_CACHE_FILE="$TEST_CACHE_DIR/usage-cache"
+  USAGE_LOCK_FILE="$TEST_CACHE_DIR/usage.lock"
+  echo "14|5|90" > "$USAGE_CACHE_FILE"
+  _fetch_usage_bg() {
+    printf 'called' > "$TEST_CACHE_DIR/fetch-called"
+  }
+  run module_usage
+  [ -f "$TEST_CACHE_DIR/fetch-called" ]
+}
+
+@test "module_usage ages reset minutes using cache file age" {
+  setup_temp
+  USAGE_CACHE_FILE="$TEST_CACHE_DIR/usage-cache"
+  USAGE_LOCK_FILE="$TEST_CACHE_DIR/usage.lock"
+  echo "60|15|180|8000" > "$USAGE_CACHE_FILE"
+  local old_ts
+  old_ts=$(date -v-3M +%Y%m%d%H%M.%S 2>/dev/null || date -d '3 minutes ago' +%Y%m%d%H%M.%S)
+  touch -t "$old_ts" "$USAGE_CACHE_FILE"
+  run module_usage
+  local plain
+  plain=$(strip_ansi "$output")
+  # used=60% → remaining=40%; aged: reset_min_5h=180-3=177, expected=41, reserve=41-60=-19
+  printf '%s' "$plain" | grep -F "5h: 40% -19% (2h 57m)" > /dev/null
+}
+
+# --- _pace_delta ---
+
+@test "_pace_delta returns empty when on-track (reserve within ±10)" {
+  # actual=40, expected=40, reserve=0
+  run _pace_delta 40 180 300
+  [ "$output" = "" ]
+}
+
+@test "_pace_delta returns green +N% when reserve (under-consuming)" {
+  # actual=10, expected=40, reserve=+30
+  run _pace_delta 10 180 300
+  local plain
+  plain=$(strip_ansi "$output")
+  [ "$plain" = " +30%" ]
+}
+
+@test "_pace_delta returns red -N% when deficit (over-consuming)" {
+  # actual=60, expected=40, reserve=-20
+  run _pace_delta 60 180 300
+  local plain
+  plain=$(strip_ansi "$output")
+  [ "$plain" = " -20%" ]
+}
+
+@test "_pace_delta returns empty at ±10 boundary (reserve=-10)" {
+  # actual=50, expected=40, reserve=-10 (within threshold)
+  run _pace_delta 50 180 300
+  [ "$output" = "" ]
+}
+
+@test "_pace_delta returns -N% just beyond -10 boundary" {
+  # actual=51, expected=40, reserve=-11
+  run _pace_delta 51 180 300
+  local plain
+  plain=$(strip_ansi "$output")
+  [ "$plain" = " -11%" ]
+}
+
+@test "_pace_delta returns empty when reset_min is empty" {
+  run _pace_delta 42 "" 300
+  [ "$output" = "" ]
+}
+
+@test "_pace_delta returns empty when reset_min is non-numeric" {
+  run _pace_delta 42 "abc" 300
+  [ "$output" = "" ]
+}
+
+@test "_pace_delta returns empty when reset_min > duration" {
+  run _pace_delta 42 400 300
+  [ "$output" = "" ]
 }
 
 # --- format_path ---

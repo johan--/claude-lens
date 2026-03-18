@@ -368,7 +368,7 @@ module_git() {
 
   local git_status=""
   if [ "${files:-0}" -gt 0 ] 2>/dev/null; then
-    git_status=" ${files}f ${C_GREEN}+${added}${C_RESET} ${C_RED}-${deleted}${C_RESET}"
+    git_status=$(printf ' %sf %b+%s%b %b-%s%b' "$files" "$C_GREEN" "$added" "$C_RESET" "$C_RED" "$deleted" "$C_RESET")
   fi
 
   printf '%s%s%s' "$branch" "${git_arrows:+ $git_arrows}" "$git_status"
@@ -394,11 +394,74 @@ _fmt_pct() {
   [[ "$1" =~ ^[0-9]+$ ]] && printf '%s%%' "$1" || printf '%s' "$1"
 }
 
+# 计算 pace delta: 剩余储备（正=余裕，负=透支）
+# 参数: actual(%) reset_minutes duration(分钟)
+# 输出: 空(on-track) 或带颜色的 " +N%" / " -N%"
+_pace_delta() {
+  local actual="$1" reset_min="$2" duration="$3"
+
+  # 数据缺失或异常时直接隐藏，避免误导状态栏
+  [[ "$actual" =~ ^[0-9]+$ ]] || return 0
+  [[ "$reset_min" =~ ^[0-9]+$ ]] || return 0
+  [[ "$duration" =~ ^[0-9]+$ ]] || return 0
+  (( duration > 0 )) || return 0
+  (( reset_min <= duration )) || return 0
+
+  local elapsed expected delta
+  elapsed=$(( duration - reset_min ))
+  expected=$(( elapsed * 100 / duration ))
+  delta=$(( expected - actual ))
+
+  # ±10 以内视为 on-track，不额外显示
+  if (( delta > 10 )); then
+    printf ' %b+%d%%%b' "$C_GREEN" "$delta" "$C_RESET"
+  elif (( delta < -10 )); then
+    printf ' %b%d%%%b' "$C_RED" "$delta" "$C_RESET"
+  fi
+}
+
+# 判断 usage 缓存是否仍是旧 schema（少于 4 字段）
+_usage_cache_needs_refresh() {
+  local cache_file="$1"
+  [ -f "$cache_file" ] || return 1
+
+  local cache_raw
+  cache_raw=$(cat "$cache_file" 2>/dev/null || true)
+  [[ "$cache_raw" == *'|'*'|'*'|'* ]] || return 0
+  return 1
+}
+
+# 按缓存年龄折算剩余分钟数，避免相对值随时间漂移
+_age_usage_reset_min() {
+  local reset_min="$1" cache_age="$2"
+  [[ "$reset_min" =~ ^[0-9]+$ ]] || return 0
+  [[ "$cache_age" =~ ^[0-9]+$ ]] || return 0
+
+  local aged_min=$(( reset_min - (cache_age / 60) ))
+  [ "$aged_min" -lt 0 ] && aged_min=0
+  printf '%s' "$aged_min"
+}
+
+# 刷新失败时保留旧 usage 缓存，但把相对分钟数推进到当前时刻
+_preserve_usage_cache_on_failure() {
+  local cache_file="$1"
+  [ -f "$cache_file" ] || return 1
+
+  local cache_age five_h="--" seven_d="--" reset_min_5h="" reset_min_7d=""
+  cache_age=$(file_age "$cache_file" 2>/dev/null || echo 0)
+  IFS='|' read -r five_h seven_d reset_min_5h reset_min_7d < "$cache_file" 2>/dev/null || true
+
+  reset_min_5h=$(_age_usage_reset_min "$reset_min_5h" "$cache_age")
+  reset_min_7d=$(_age_usage_reset_min "$reset_min_7d" "$cache_age")
+  cache_set "$cache_file" "${five_h}|${seven_d}|${reset_min_5h}|${reset_min_7d}"
+}
+
 # 后台子 shell 异步拉取 usage API 数据并写缓存（stale-while-revalidate 模式）
 _fetch_usage_bg() {
   local cache_file="$1" lock_file="$2"
   (
-    trap 'rm -f "$lock_file"' EXIT
+    local keep_lock=""
+    trap '[ -n "$keep_lock" ] || rm -f "$lock_file"' EXIT
 
     local cred_json access_token
     cred_json=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null || true)
@@ -416,32 +479,48 @@ _fetch_usage_bg() {
       local five_h seven_d
       five_h=$(printf '%s' "$api_resp" | jq -r '.five_hour.utilization // empty' 2>/dev/null | cut -d. -f1)
       seven_d=$(printf '%s' "$api_resp" | jq -r '.seven_day.utilization // empty' 2>/dev/null | cut -d. -f1)
+      local now_epoch
+      now_epoch=$(date +%s)
 
       # 提取 5h 窗口重置时间，计算距今剩余分钟数
       local reset_at reset_minutes=""
-      reset_at=$(printf '%s' "$api_resp" | jq -r '.five_hour.expires_at // empty' 2>/dev/null || true)
+      reset_at=$(printf '%s' "$api_resp" | jq -r '.five_hour.expires_at // .five_hour.resets_at // empty' 2>/dev/null || true)
       if [ -n "$reset_at" ]; then
-        local reset_epoch now_epoch
+        local reset_epoch
         # W2: 去掉小数秒后缀时也丢失了时区信息，需显式指定 UTC
         # macOS: TZ=UTC date -jf 强制 UTC；Linux: 附加 Z 后缀告知 date -d 为 UTC
         local reset_ts="${reset_at%%.*}"
         reset_epoch=$(TZ=UTC date -jf "%Y-%m-%dT%H:%M:%S" "$reset_ts" +%s 2>/dev/null || date -d "${reset_ts}Z" +%s 2>/dev/null || true)
-        now_epoch=$(date +%s)
         if [ -n "$reset_epoch" ]; then
           reset_minutes=$(( (reset_epoch - now_epoch) / 60 ))
           [ "$reset_minutes" -lt 0 ] && reset_minutes=0
         fi
       fi
 
-      [ -n "$five_h" ] && [ -n "$seven_d" ] && result="${five_h}|${seven_d}|${reset_minutes}"
+      # 提取 7d 窗口重置时间，供 pace 计算复用
+      local reset_at_7d reset_minutes_7d=""
+      reset_at_7d=$(printf '%s' "$api_resp" | jq -r '.seven_day.resets_at // .seven_day.expires_at // empty' 2>/dev/null || true)
+      if [ -n "$reset_at_7d" ]; then
+        local reset_ts_7d="${reset_at_7d%%.*}"
+        local reset_epoch_7d
+        reset_epoch_7d=$(TZ=UTC date -jf "%Y-%m-%dT%H:%M:%S" "$reset_ts_7d" +%s 2>/dev/null || date -d "${reset_ts_7d}Z" +%s 2>/dev/null || true)
+        if [ -n "$reset_epoch_7d" ]; then
+          reset_minutes_7d=$(( (reset_epoch_7d - now_epoch) / 60 ))
+          [ "$reset_minutes_7d" -lt 0 ] && reset_minutes_7d=0
+        fi
+      fi
+
+      [ -n "$five_h" ] && [ -n "$seven_d" ] && result="${five_h}|${seven_d}|${reset_minutes}|${reset_minutes_7d}"
     fi
 
     if [ -n "$result" ]; then
       cache_set "$cache_file" "$result"
     elif [ -f "$cache_file" ]; then
-      touch "$cache_file"
+      _preserve_usage_cache_on_failure "$cache_file"
+      keep_lock=1
     else
-      cache_set "$cache_file" "--|--"
+      cache_set "$cache_file" "--|--||"
+      keep_lock=1
     fi
   ) &
 }
@@ -449,9 +528,12 @@ _fetch_usage_bg() {
 module_usage() {
   local cache_file="${USAGE_CACHE_FILE:-${CACHE_PREFIX}-usage}"
   local lock_file="${USAGE_LOCK_FILE:-${CACHE_PREFIX}-usage.lock}"
+  local force_refresh="false"
+
+  _usage_cache_needs_refresh "$cache_file" && force_refresh="true"
 
   # 若缓存过期（TTL 300s），用锁文件保证只启动一次后台刷新
-  if ! cache_get "$cache_file" 300 > /dev/null 2>&1; then
+  if [ "$force_refresh" = "true" ] || ! cache_get "$cache_file" 300 > /dev/null 2>&1; then
     if (set -o noclobber; echo $$ > "$lock_file") 2>/dev/null; then
       _fetch_usage_bg "$cache_file" "$lock_file"
     elif [ -f "$lock_file" ] && [ "$(file_age "$lock_file")" -gt 10 ]; then
@@ -464,30 +546,55 @@ module_usage() {
   fi
 
   # 从缓存读取（可能是过期数据，stale-while-revalidate）
-  local five_h="--" seven_d="--" reset_min=""
+  local five_h="--" seven_d="--" reset_min_5h="" reset_min_7d=""
+  local cache_age="0"
   if [ -f "$cache_file" ]; then
-    IFS='|' read -r five_h seven_d reset_min < "$cache_file" 2>/dev/null || true
+    cache_age=$(file_age "$cache_file" 2>/dev/null || echo 0)
+    IFS='|' read -r five_h seven_d reset_min_5h reset_min_7d < "$cache_file" 2>/dev/null || true
   fi
   five_h="${five_h:---}"
   seven_d="${seven_d:---}"
+  reset_min_5h=$(_age_usage_reset_min "$reset_min_5h" "$cache_age")
+  reset_min_7d=$(_age_usage_reset_min "$reset_min_7d" "$cache_age")
 
-  # 将 reset_min 格式化为可读字符串（如 "1h 30m" 或 "45m"）
-  local reset_str=""
-  if [ -n "$reset_min" ] && [[ "$reset_min" =~ ^[0-9]+$ ]]; then
-    if [ "$reset_min" -ge 60 ]; then
-      reset_str=" ($((reset_min / 60))h $((reset_min % 60))m)"
+  # 将 reset_min 格式化为可读字符串
+  local reset_str_5h="" reset_str_7d=""
+  if [ -n "$reset_min_5h" ] && [[ "$reset_min_5h" =~ ^[0-9]+$ ]]; then
+    if [ "$reset_min_5h" -ge 60 ]; then
+      reset_str_5h=" ($((reset_min_5h / 60))h $((reset_min_5h % 60))m)"
     else
-      reset_str=" (${reset_min}m)"
+      reset_str_5h=" (${reset_min_5h}m)"
     fi
   fi
+  if [ -n "$reset_min_7d" ] && [[ "$reset_min_7d" =~ ^[0-9]+$ ]]; then
+    local days_7d=$(( reset_min_7d / 1440 ))
+    local hours_7d=$(( (reset_min_7d % 1440) / 60 ))
+    if [ "$days_7d" -gt 0 ]; then
+      reset_str_7d=" (${days_7d}d ${hours_7d}h)"
+    elif [ "$hours_7d" -gt 0 ]; then
+      reset_str_7d=" (${hours_7d}h)"
+    else
+      reset_str_7d=" (${reset_min_7d}m)"
+    fi
+  fi
+
+  # pace delta: 正=余裕(绿) 负=透支(红)，旧缓存缺字段时自动隐藏
+  local delta_5h delta_7d
+  delta_5h=$(_pace_delta "$five_h" "$reset_min_5h" 300)
+  delta_7d=$(_pace_delta "$seven_d" "$reset_min_7d" 10080)
+
+  # 显示为剩余百分比（余额视角），颜色仍基于已用量（越高越危险）
+  local five_h_left="--" seven_d_left="--"
+  [[ "$five_h" =~ ^[0-9]+$ ]] && five_h_left=$((100 - five_h))
+  [[ "$seven_d" =~ ^[0-9]+$ ]] && seven_d_left=$((100 - seven_d))
 
   local five_h_color seven_d_color
   five_h_color=$(_color_for_pct "$five_h")
   seven_d_color=$(_color_for_pct "$seven_d")
 
-  printf '5h: %b%s%b%s │ 7d: %b%s%b' \
-    "$five_h_color" "$(_fmt_pct "$five_h")" "$C_RESET" "$reset_str" \
-    "$seven_d_color" "$(_fmt_pct "$seven_d")" "$C_RESET"
+  printf '5h: %b%s%b%s%s │ 7d: %b%s%b%s%s' \
+    "$five_h_color" "$(_fmt_pct "$five_h_left")" "$C_RESET" "$delta_5h" "$reset_str_5h" \
+    "$seven_d_color" "$(_fmt_pct "$seven_d_left")" "$C_RESET" "$delta_7d" "$reset_str_7d"
 }
 
 # === Path Display ===
