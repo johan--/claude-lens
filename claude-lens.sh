@@ -83,7 +83,7 @@ _fetch_usage() {
     # Validate+extract in one jq call; required fields have no //0 fallback so missing data fails read
     # rmins: convert ISO reset timestamp to remaining minutes entirely inside jq
     IFS=$'\t' read -r F5 S7 EX EU EL RM5 RM7 < <(jq -r '
-      def rmins: if . and . != "" then (sub("\\.[0-9]+"; "") | fromdateiso8601) - (now|floor) | ./60|floor | if .<0 then 0 else . end else null end;
+      def rmins: if . and . != "" then (sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | fromdateiso8601) - (now|floor) | ./60|floor | if .<0 then 0 else . end else null end;
       [(.five_hour.utilization|floor),(.seven_day.utilization|floor),
         (if .extra_usage.is_enabled then 1 else 0 end),
         (.extra_usage.used_credits//0|floor),(.extra_usage.monthly_limit//0|floor),
