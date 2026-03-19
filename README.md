@@ -31,7 +31,7 @@ To remove: `claude config set statusLine.command ""`
 
 ## Under the Hood
 
-153 lines of Bash. Claude Code polls the statusline every ~300ms, so speed matters:
+~150 lines of Bash. Claude Code polls the statusline every ~300ms, so speed matters:
 
 | Data | Source | Cache |
 |------|--------|-------|
