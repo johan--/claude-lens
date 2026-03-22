@@ -42,8 +42,12 @@ To remove: `claude config set statusLine.command ""`
 |---|---|---|---|
 | Runtime | `jq` | Node.js 18+ / npm | Compiled binary |
 | Codebase | ~200 lines, single file | 1000+ lines + node_modules | Compiled, not inspectable |
+| Execution | ~10ms, 3% of refresh cycle | ~90ms, 30% of refresh cycle | ~5ms (est.) |
+| Memory | ~2 MB | ~57 MB | ~3 MB (est.) |
 | Failure modes | Read-only, worst case prints "Claude" | Runtime dependency, package manager | Generally stable |
 | Pace tracking | Usage rate vs time remaining | Trend-only or none | None |
+
+Execution and memory measured on Apple Silicon, 300 runs, same stdin JSON. Rust/Go values are estimates.
 
 Need themes, powerline aesthetics, or TUI config? Try [ccstatusline](https://github.com/sirmalloc/ccstatusline). The entire source of claude-lens is [one file](claude-lens.sh). Read it.
 
@@ -53,7 +57,7 @@ Claude Code polls the statusline every ~300ms:
 
 | Data | Source | Cache |
 |------|--------|-------|
-| Model, context, duration, cost | stdin JSON (single `jq` call) | None needed |
+| Model, context, cost | stdin JSON (single `jq` call) | None needed |
 | Quota (5h, 7d, pace) | stdin `rate_limits` (CC >= 2.1.80) | None needed (real-time) |
 | Quota fallback | Anthropic Usage API (CC < 2.1.80) | `/tmp`, 300s TTL, async background refresh |
 | Git branch + diff | `git` commands | `/tmp`, 5s TTL |
