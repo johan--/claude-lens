@@ -1,6 +1,6 @@
 # Claude Lens
 
-Know your quota before you hit the wall. A statusline for Claude Code in ~165 lines of Bash + jq.
+Know your quota before you hit the wall. A statusline for Claude Code in ~200 lines of Bash + jq.
 
 Most statuslines show "you used 60%." That number means nothing without context. 60% with 30 minutes left? Fine, the window resets soon. 60% with 4 hours left? You're about to hit the wall. claude-lens compares your usage rate to the time remaining and shows the delta. No Node.js, no npm, no lock files. Single Bash file.
 
@@ -41,7 +41,7 @@ To remove: `claude config set statusLine.command ""`
 |  | claude-lens | Node.js/TypeScript statuslines | Rust/Go statuslines |
 |---|---|---|---|
 | Runtime | `jq` | Node.js 18+ / npm | Compiled binary |
-| Codebase | ~165 lines, single file | 1000+ lines + node_modules | Compiled, not inspectable |
+| Codebase | ~200 lines, single file | 1000+ lines + node_modules | Compiled, not inspectable |
 | Failure modes | Read-only, worst case prints "Claude" | Runtime dependency, package manager | Generally stable |
 | Pace tracking | Usage rate vs time remaining | Trend-only or none | None |
 

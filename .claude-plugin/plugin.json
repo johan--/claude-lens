@@ -1,6 +1,6 @@
 {
   "name": "claude-lens",
-  "description": "A statusline for Claude Code that just works. ~165 lines of Bash + jq -- no Node.js, no npm, nothing to break. Tracks quota pace too.",
+  "description": "A statusline for Claude Code that just works. ~200 lines of Bash + jq -- no Node.js, no npm, nothing to break. Tracks quota pace too.",
   "version": "0.4.1",
   "author": {
     "name": "yuhan",
