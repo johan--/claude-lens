@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Claude Code statusline plugin
-# Line1: [model effort] dir | branch Nf +A -D  |  Line2: bar PCT% | 5h remain | 7d remain | [$cost] | duration
+# Line1: [model effort] dir | branch Nf +A -D  |  Line2: bar PCT% | 5h remain | 7d remain | [$cost]
 
 # Disable glob expansion so unquoted vars with wildcards (e.g. DIR paths)
 # are never accidentally expanded into filename lists.
@@ -22,13 +22,13 @@ NOW=$(date +%s)
 _stale() { [ ! -f "$1" ] || [ $((NOW - $(stat -f%m "$1" 2>/dev/null || stat -c%Y "$1" 2>/dev/null || echo 0))) -gt "$2" ]; }
 
 # ── Parse stdin + settings in one jq call ──
-# Fields: MODEL DIR PCT CTX DUR COST EFF HAS_RL U5 U7 R5 R7
+# Fields: MODEL DIR PCT CTX COST EFF HAS_RL U5 U7 R5 R7
 HAS_RL=0
-IFS=$'\t' read -r MODEL DIR PCT CTX DUR COST EFF HAS_RL U5 U7 R5 R7 < <(
+IFS=$'\t' read -r MODEL DIR PCT CTX COST EFF HAS_RL U5 U7 R5 R7 < <(
   jq -r --slurpfile cfg <(cat ~/.claude/settings.json 2>/dev/null || echo '{}') \
     '[(.model.display_name//"?"),(.workspace.project_dir//"."),
     (.context_window.used_percentage//0|floor),(.context_window.context_window_size//0),
-    (.cost.total_duration_ms//0|floor),(.cost.total_cost_usd//0),
+    (.cost.total_cost_usd//0),
     ($cfg[0].effortLevel//"default"),
     (if .rate_limits then 1 else 0 end),
     (.rate_limits.five_hour.used_percentage//null|if type=="number" then floor else "--" end),
@@ -47,13 +47,6 @@ BAR=""
 for ((i = 0; i < F; i++)); do BAR+='█'; done
 for ((i = F; i < 10; i++)); do BAR+='░'; done
 ((CTX >= 1000000)) && CL="$((CTX / 1000000))M" || CL="$((CTX / 1000))K"
-
-# ── Duration Formatting ──
-if ((DUR >= 3600000)); then
-  DS="$((DUR / 3600000))h$((DUR / 60000 % 60))m"
-elif ((DUR >= 60000)); then
-  DS="$((DUR / 60000))m$((DUR / 1000 % 60))s"
-else DS="$((DUR / 1000))s"; fi
 
 # ── Git Info (5s cache, atomic write) ──
 # Cache key encodes DIR so concurrent sessions in different repos don't clash.
@@ -236,7 +229,6 @@ if [[ "$SHOW_COST" == "1" ]]; then
   printf -v _CS "\$%.2f" "$COST" 2>/dev/null
   [[ "$_CS" != "\$0.00" ]] && L2+=" | $_CS"
 fi
-L2+=" | ${D}${DS}${N}"
 
 echo -e "${C}[${MODEL} ${EF}]${N} ${SD}${GIT}"
 echo -e "$L2"
