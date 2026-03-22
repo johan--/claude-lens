@@ -4,11 +4,12 @@ Know your quota before you hit the wall. A statusline for Claude Code in ~200 li
 
 Most statuslines show "you used 60%." That number means nothing without context. 60% with 30 minutes left? Fine, the window resets soon. 60% with 4 hours left? You're about to hit the wall. claude-lens compares your usage rate to the time remaining and shows the delta. No Node.js, no npm, no lock files. Single Bash file.
 
-![claude-lens showing 92% quota remaining with +17% pace delta](.github/claude-lens-showcase.png)
+![claude-lens statusline showing pace delta in green and red](.github/claude-lens-showcase.jpg)
 
 - **+17%** green = you've used 17% less than expected. Headroom. Keep going.
-- **92%** / **29%** = remaining in the 5h and 7d windows. **(3h)** = resets in 3 hours.
-- Top line: model, effort, context %, project, git branch `+N -N`
+- **-15%** red = you're burning 15% faster than sustainable. Slow down.
+- **92%** / **29%** = remaining in the 5h and 7d windows. **3h** = resets in 3 hours.
+- Top line: model, effort, project `(branch)`, git changes
 
 ## Install
 

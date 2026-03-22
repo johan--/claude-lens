@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Claude Code statusline plugin
-# Line1: [model effort] dir | branch Nf +A -D  |  Line2: bar PCT% | 5h remain | 7d remain | [$cost]
+# Line1: model (ctx) effort | project (branch) Nf +A -D
+# Line2: bar PCT% CL | 5h remain [±pace] countdown  7d remain [±pace] countdown
 
 # Disable glob expansion so unquoted vars with wildcards (e.g. DIR paths)
 # are never accidentally expanded into filename lists.
@@ -38,6 +39,20 @@ IFS=$'\t' read -r MODEL DIR PCT CTX COST EFF HAS_RL U5 U7 R5 R7 < <(
 )
 case "${EFF:-default}" in high) EF='●' ;; low) EF='◔' ;; *) EF='◑' ;; esac
 
+# ── Context label (needed by MODEL_SHORT and line 2) ──
+if ((CTX >= 1000000)); then
+  CL="$((CTX / 1000000))M"
+elif ((CTX > 0)); then
+  CL="$((CTX / 1000))K"
+else CL=""; fi
+
+# ── MODEL_SHORT: strip redundant context label ──
+MODEL=${MODEL/ context)/)}
+[[ "$CTX" -gt 0 && "$MODEL" != *"("* ]] && MODEL="${MODEL} (${CL})"
+# Truncate long model names to keep padding within 0-5 chars.
+_ML="${MODEL} ${EF}"
+((${#_ML} > 22)) && MODEL="${MODEL:0:$((22 - 2 - ${#EF}))}…"
+
 # ── Progress Bar ──
 F=$((PCT / 10))
 ((F < 0)) && F=0
@@ -46,7 +61,6 @@ if ((PCT >= 90)); then BC=$R; elif ((PCT >= 70)); then BC=$Y; else BC=$G; fi
 BAR=""
 for ((i = 0; i < F; i++)); do BAR+='█'; done
 for ((i = F; i < 10; i++)); do BAR+='░'; done
-((CTX >= 1000000)) && CL="$((CTX / 1000000))M" || CL="$((CTX / 1000))K"
 
 # ── Git Info (5s cache, atomic write) ──
 # Cache key encodes DIR so concurrent sessions in different repos don't clash.
@@ -67,23 +81,29 @@ if _stale "$GC" 5; then
   fi
 fi
 IFS='|' read -r BR FC AD DL <"$GC" 2>/dev/null
-GIT=""
+
+# ── Project Name + Line 1 Right Section ──
+# Extract project name. Worktree: save repo name explicitly.
+PN="${DIR##*/}"
+IS_WT=0 _REPO=""
+if [[ "${DIR/#$HOME/\~}" =~ /([^/]+)/\.claude/worktrees/([^/]+) ]]; then
+  IS_WT=1
+  _REPO="${BASH_REMATCH[1]}"
+  _WT_NAME="${BASH_REMATCH[2]}"
+  PN="$_REPO"
+fi
+((${#PN} > 25)) && PN="${PN:0:25}…"
+
+# Format: project (branch) [git stats]
+L1R="$PN"
 if [ -n "$BR" ]; then
   ((${#BR} > 35)) && BR="${BR:0:35}…"
-  GS=""
-  ((FC > 0)) 2>/dev/null && GS=" ${FC}f ${G}+${AD}${N} ${R}-${DL}${N}"
-  GIT=" | ${BR}${GS}"
-fi
-
-# ── Path Shortening ──
-# Worktree paths follow the pattern /<repo>/.claude/worktrees/<name>; collapse
-# them to "<repo>/<name>" so the branch-like context fits in one glance.
-SD="${DIR/#$HOME/~}"
-if [[ "$SD" =~ /([^/]+)/\.claude/worktrees/([^/]+) ]]; then
-  SD="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
-  ((${#SD} > 35)) && SD="${SD:0:35}…"
-elif ((${#SD} > 45)); then
-  SD="…${SD: -44}"
+  L1R+=" (${BR})"
+  ((FC > 0)) 2>/dev/null && L1R+=" ${FC}f ${G}+${AD}${N} ${R}-${DL}${N}"
+elif [[ "$IS_WT" == "1" ]]; then
+  # Detached HEAD in worktree: show repo/worktree to preserve identity
+  L1R="${_REPO}/${_WT_NAME}"
+  ((${#L1R} > 25)) && L1R="${L1R:0:25}…"
 fi
 
 # Usage data: prefer stdin rate_limits (CC >=2.1.80), fall back to API polling
@@ -201,34 +221,51 @@ _usage() {
     if [[ "$rm" =~ ^[0-9]+$ ]] && ((rm <= w)); then
       # Pace delta: positive = budget surplus (ahead of linear burn), negative = overspend.
       local d=$(((w - rm) * 100 / w - u))
-      ((d > 10)) && printf " ${G}+%d%%${N}" "$d"
-      ((d < -10)) && printf " ${R}%d%%${N}" "$d"
+      ((d > 5)) && printf " ${G}+%d%%${N}" "$d"
+      ((d < -5)) && printf " ${R}%d%%${N}" "$d"
     fi
   fi
   [[ "$rm" =~ ^[0-9]+$ ]] || return
   ((rm >= 1440)) && {
-    printf " ${D}(%dd)${N}" $((rm / 1440))
+    printf " ${D}%dd${N}" $((rm / 1440))
     return
   }
   ((rm >= 60)) && {
-    printf " ${D}(%dh)${N}" $((rm / 60))
+    printf " ${D}%dh${N}" $((rm / 60))
     return
   }
-  printf " ${D}(%dm)${N}" "$rm"
+  printf " ${D}%dm${N}" "$rm"
 }
 
-# ── Output Assembly ──
-L2="${BC}${BAR}${N} ${PCT}% of ${CL}"
-L2+=" | 5h: $(_usage "$U5" "$RM5" 300)"
-L2+=" | 7d: $(_usage "$U7" "$RM7" 10080)"
-# Extra usage: show only when enabled and has actual spending
-[ "$XO" = 1 ] && ((XU > 0)) &&
-  printf -v _XS " | ${Y}\$%d.%02d${N}/\$%d.%02d" $((XU / 100)) $((XU % 100)) $((XL / 100)) $((XL % 100)) && L2+="$_XS"
-# Session cost: only for confirmed API users (no rate_limits + no OAuth cache)
-if [[ "$SHOW_COST" == "1" ]]; then
-  printf -v _CS "\$%.2f" "$COST" 2>/dev/null
-  [[ "$_CS" != "\$0.00" ]] && L2+=" | $_CS"
+# ── Output Assembly (symmetric single-pipe alignment) ──
+# Default XO/XU/XL for stdin path (extra usage only available via API fallback).
+: "${XO:=0}" "${XU:=0}" "${XL:=0}"
+
+# Build plain-text left sections for width measurement (no ANSI codes).
+L1_PLAIN="${MODEL} ${EF}"
+L2_PLAIN="${BAR} ${PCT}% ${CL}"
+# Pad shorter side so | aligns on both lines.
+W1=${#L1_PLAIN} W2=${#L2_PLAIN}
+PAD1="" PAD2=""
+if ((W1 > W2)); then
+  printf -v PAD2 "%*s" $((W1 - W2)) ""
+elif ((W2 > W1)); then
+  printf -v PAD1 "%*s" $((W2 - W1)) ""
 fi
 
-echo -e "${C}[${MODEL} ${EF}]${N} ${SD}${GIT}"
+# Line 1: model (context) effort | project (branch) git-stats
+L1="${C}${MODEL} ${EF}${N}${PAD1} ${D}|${N}  ${L1R}"
+
+# Line 2: bar pct% CL | 5h ...  7d ...
+L2="${BC}${BAR}${N} ${PCT}% ${CL}${PAD2} ${D}|${N}  5h $(_usage "$U5" "$RM5" 300)  7d $(_usage "$U7" "$RM7" 10080)"
+# Extra usage: only when enabled and has actual spending (API fallback only)
+[ "$XO" = 1 ] && ((XU > 0)) &&
+  printf -v _XS "  ${Y}\$%d.%02d${N}/\$%d.%02d" $((XU / 100)) $((XU % 100)) $((XL / 100)) $((XL % 100)) && L2+="$_XS"
+# Session cost: only when /tmp/claude-sl-usage does not exist
+if [[ "$SHOW_COST" == "1" ]]; then
+  printf -v _CS "\$%.2f" "$COST" 2>/dev/null
+  [[ "$_CS" != "\$0.00" ]] && L2+="  $_CS"
+fi
+
+echo -e "$L1"
 echo -e "$L2"
