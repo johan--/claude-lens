@@ -17,9 +17,9 @@ If jq is not found, tell the user to install it (`brew install jq` on macOS, `ap
 
 ## Step 2: Determine plugin install path
 
-The plugin was installed via the Claude Code plugin system. Find the claude-lens.sh script within the plugin directory.
+The plugin was installed via the Claude Code plugin system. Find the claude-lens.sh script within the plugin cache.
 
-Run: `find ~/.claude/plugins/claude-lens* -name "claude-lens.sh" 2>/dev/null | head -1`
+Run: `find ~/.claude/plugins/cache -path "*/claude-lens/*/claude-lens.sh" 2>/dev/null | head -1`
 
 If found, save that path as SCRIPT_PATH.
 
@@ -37,7 +37,16 @@ Run: `chmod +x <SCRIPT_PATH>`
 
 ## Step 4: Configure statusline
 
-Run: `claude config set statusLine.command <SCRIPT_PATH>`
+Read `~/.claude/settings.json` with the Read tool. Then use the Edit tool to add or update the `statusLine` key:
+
+```json
+"statusLine": {
+  "type": "command",
+  "command": "<SCRIPT_PATH>"
+}
+```
+
+If `statusLine` already exists, update the `command` value. If it does not exist, add it as a top-level key.
 
 ## Step 5: Confirm
 
@@ -45,4 +54,4 @@ Tell the user:
 
 - claude-lens has been configured successfully.
 - Restart Claude Code (or start a new session) to see the statusline.
-- To remove later: `claude config set statusLine.command ""`
+- To remove later: delete the `statusLine` block from `~/.claude/settings.json`.

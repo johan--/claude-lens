@@ -17,11 +17,14 @@ Requires `jq`.
 
 **Plugin (recommended):**
 
+Run in your terminal:
+
+```bash
+claude plugin marketplace add Astro-Han/claude-lens
+claude plugin install claude-lens
 ```
-/plugin marketplace add Astro-Han/claude-lens
-/plugin install claude-lens
-/claude-lens:setup
-```
+
+Then inside Claude Code, type `/claude-lens:setup`.
 
 **Manual:**
 
@@ -29,13 +32,22 @@ Requires `jq`.
 curl -o ~/.claude/statusline.sh \
   https://raw.githubusercontent.com/Astro-Han/claude-lens/main/claude-lens.sh
 chmod +x ~/.claude/statusline.sh
+```
 
-claude config set statusLine.command ~/.claude/statusline.sh
+Add to `~/.claude/settings.json`:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "~/.claude/statusline.sh"
+  }
+}
 ```
 
 Restart Claude Code. Done.
 
-To remove: `claude config set statusLine.command ""`
+To remove: delete the `statusLine` block from `~/.claude/settings.json`.
 
 ## How It Compares
 
