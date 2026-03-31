@@ -80,10 +80,12 @@ Claude Code polls the statusline every ~300ms:
 |------|--------|-------|
 | Model, context, cost | stdin JSON (single `jq` call) | None needed |
 | Quota (5h, 7d, pace) | stdin `rate_limits` (CC >= 2.1.80) | None needed (real-time) |
-| Quota fallback | Anthropic Usage API (CC < 2.1.80) | `/tmp`, 300s TTL, async background refresh |
-| Git branch + diff | `git` commands | `/tmp`, 5s TTL |
+| Quota fallback | Anthropic Usage API (CC < 2.1.80) | Private cache dir, 300s TTL, async background refresh |
+| Git branch + diff | `git` commands | Private cache dir, 5s TTL |
 
 On Claude Code >= 2.1.80, usage data comes directly from stdin. No network calls. On older versions, it falls back to the Usage API in a background subshell so the statusline never blocks.
+
+Cache files live in a private per-user directory (`$XDG_RUNTIME_DIR/claude-pace` or `~/.cache/claude-pace`, mode 700). All cache reads are validated before use. No files are ever written to shared `/tmp`.
 
 ## License
 
