@@ -10,10 +10,10 @@ assert_line() {
   local name="$1" line_num="$2" pattern="$3" actual
   actual=$(echo "$OUTPUT" | sed -n "${line_num}p")
   if [[ "$actual" =~ $pattern ]]; then
-    ((PASS++))
+    PASS=$((PASS + 1))
     echo "  PASS: $name"
   else
-    ((FAIL++))
+    FAIL=$((FAIL + 1))
     echo "  FAIL: $name"
     echo "    expected pattern: $pattern"
     echo "    actual:           $actual"
@@ -28,10 +28,10 @@ assert_aligned() {
   col1=${l1%%|*} col2=${l2%%|*}
   col1=${#col1} col2=${#col2}
   if [[ "$col1" == "$col2" ]]; then
-    ((PASS++))
+    PASS=$((PASS + 1))
     echo "  PASS: $name (col $col1)"
   else
-    ((FAIL++))
+    FAIL=$((FAIL + 1))
     echo "  FAIL: $name (L1=$col1 L2=$col2)"
   fi
 }

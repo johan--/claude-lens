@@ -73,7 +73,11 @@ if _stale "$GC" 5; then
     _FC=0 _AD=0 _DL=0
     while IFS=$'\t' read -r a d _; do
       # Skip binary files (reported as "-" instead of a number).
-      [[ "$a" =~ ^[0-9]+$ ]] && ((_FC++, _AD += a, _DL += d))
+      [[ "$a" =~ ^[0-9]+$ ]] && {
+        _FC=$((_FC + 1))
+        _AD=$((_AD + a))
+        _DL=$((_DL + d))
+      }
     done < <(git -C "$DIR" --no-optional-locks diff HEAD --numstat 2>/dev/null)
     _TMP=$(mktemp /tmp/claude-sl-g-XXXXXX)
     echo "${_BR}|${_FC}|${_AD}|${_DL}" >"$_TMP" && mv "$_TMP" "$GC"
