@@ -37,3 +37,25 @@
 - Symmetric single-pipe alignment redesign (~270 lines)
 - Add performance metrics to comparison table
 - Remove session duration display
+
+## 0.4.1
+
+- Merge formatting functions (`_uf`/`_pace`/`_rc`) into single `_usage`
+- Restore extra usage display when actual spending exists
+- Fix 7d reset countdown always showing
+
+## 0.4.0
+
+- Use stdin `rate_limits` for real-time usage (no network calls on CC >= 2.1.80)
+- Add plugin marketplace support for one-command install
+- Fix `jq null|floor` crash on jq 1.7.1
+
+## 0.3.1
+
+- Show reset countdown for usage windows
+- Fix cache degradation: preserve good data on API failure
+
+## 0.3.0
+
+- Full rewrite (962 lines to 142)
+- Remaining% display, pace delta, conditional cost display
