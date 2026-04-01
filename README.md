@@ -87,6 +87,10 @@ On Claude Code >= 2.1.80, usage data comes directly from stdin. No network calls
 
 Cache files live in a private per-user directory (`$XDG_RUNTIME_DIR/claude-pace` or `~/.cache/claude-pace`, mode 700). All cache reads are validated before use. No files are ever written to shared `/tmp`.
 
+## Also by the Author
+
+[**diffpane**](https://github.com/Astro-Han/diffpane) - Real-time TUI diff viewer for AI coding agents. See what Claude Code changes as it happens.
+
 ## License
 
 MIT
