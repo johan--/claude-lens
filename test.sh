@@ -88,11 +88,19 @@ invoke_with_env_and_path() {
   env HOME="$home_dir" XDG_RUNTIME_DIR="$runtime_dir" USER=tester PATH="$path_dir:$PATH" \
     CLAUDE_CODE_OAUTH_TOKEN=fake-token bash claude-pace.sh 2>/dev/null <<<"$input"
 }
+invoke_with_env_and_path_and_token() {
+  local home_dir="$1" runtime_dir="$2" path_dir="$3" token="$4" input="$5"
+  env HOME="$home_dir" XDG_RUNTIME_DIR="$runtime_dir" USER=tester PATH="$path_dir:$PATH" \
+    CLAUDE_CODE_OAUTH_TOKEN="$token" bash claude-pace.sh 2>/dev/null <<<"$input"
+}
 run_with_env_and_path() {
   invoke_with_env_and_path "$1" "$2" "$3" "$4" | strip_ansi
 }
 run_side_effect_with_env_and_path() {
   invoke_with_env_and_path "$1" "$2" "$3" "$4" >/dev/null
+}
+run_side_effect_with_env_and_path_and_token() {
+  invoke_with_env_and_path_and_token "$1" "$2" "$3" "$4" "$5" >/dev/null
 }
 
 git_cache_path_for_dir() {
@@ -304,6 +312,77 @@ chmod +x "$NO_CACHE_FAKE_BIN/curl"
 OUTPUT=$(run_with_env_and_path "/dev/null" "" "$NO_CACHE_FAKE_BIN" '{"model":{"display_name":"Opus 4.6"},"workspace":{"project_dir":"'"$PWD"'"},"context_window":{"used_percentage":20,"context_window_size":200000},"cost":{"total_cost_usd":1.23}}')
 assert_line "no-cache mode still shows fetched 5h usage" 2 '5h 11%'
 assert_line "no-cache mode still shows fetched 7d usage" 2 '7d 22%'
+
+# ── Test 20: Usage API token must not appear in curl argv ──
+echo "Test 20: usage API token stays out of curl argv"
+TOKEN_SAFE_BIN="$TEST_TMP/token-safe-bin"
+TOKEN_SAFE_ARGS="$TEST_TMP/token-safe-args"
+TOKEN_SAFE_HEADERS="$TEST_TMP/token-safe-headers"
+mkdir -p "$TOKEN_SAFE_BIN"
+cat >"$TOKEN_SAFE_BIN/curl" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >"$TOKEN_SAFE_ARGS"
+: >"$TOKEN_SAFE_HEADERS"
+for arg in "\$@"; do
+  case "\$arg" in
+    @*)
+      cat "\${arg#@}" >>"$TOKEN_SAFE_HEADERS"
+      ;;
+  esac
+done
+printf 'not-json\n'
+EOF
+chmod +x "$TOKEN_SAFE_BIN/curl"
+OUTPUT=$(run_with_env_and_path "/dev/null" "" "$TOKEN_SAFE_BIN" '{"model":{"display_name":"Opus 4.6"},"workspace":{"project_dir":"'"$PWD"'"},"context_window":{"used_percentage":20,"context_window_size":200000},"cost":{"total_cost_usd":1.23}}')
+if [[ ! -f "$TOKEN_SAFE_ARGS" ]]; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: token-safe path invokes curl"
+elif grep -Fq 'fake-token' "$TOKEN_SAFE_ARGS"; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: usage API token stays out of curl argv"
+  echo "    argv: $(cat "$TOKEN_SAFE_ARGS")"
+elif ! grep -Fq 'Authorization: Bearer fake-token' "$TOKEN_SAFE_HEADERS"; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: token-safe path still passes authorization header"
+  echo "    headers: $(cat "$TOKEN_SAFE_HEADERS")"
+else
+  PASS=$((PASS + 1))
+  echo "  PASS: token-safe path invokes curl"
+  PASS=$((PASS + 1))
+  echo "  PASS: usage API token stays out of curl argv"
+  PASS=$((PASS + 1))
+  echo "  PASS: token-safe path still passes authorization header"
+fi
+
+# ── Test 21: Malformed token with newline must not reach curl ──
+echo "Test 21: malformed token is rejected before curl"
+TOKEN_REJECT_BIN="$TEST_TMP/token-reject-bin"
+TOKEN_REJECT_MARKER="$TEST_TMP/token-reject-marker"
+mkdir -p "$TOKEN_REJECT_BIN"
+cat >"$TOKEN_REJECT_BIN/curl" <<EOF
+#!/usr/bin/env bash
+printf 'called\n' >"$TOKEN_REJECT_MARKER"
+printf 'not-json\n'
+EOF
+chmod +x "$TOKEN_REJECT_BIN/curl"
+BAD_TOKEN=$'bad-token\nurl = https://evil.invalid'
+run_side_effect_with_env_and_path_and_token "/dev/null" "" "$TOKEN_REJECT_BIN" "$BAD_TOKEN" '{"model":{"display_name":"Opus 4.6"},"workspace":{"project_dir":"'"$PWD"'"},"context_window":{"used_percentage":20,"context_window_size":200000},"cost":{"total_cost_usd":1.23}}'
+assert_missing_path "malformed token does not invoke curl" "$TOKEN_REJECT_MARKER"
+
+# ── Test 22: Token ending with newline must not reach curl ──
+echo "Test 22: trailing newline token is rejected before curl"
+TOKEN_TRAILING_BIN="$TEST_TMP/token-trailing-bin"
+TOKEN_TRAILING_MARKER="$TEST_TMP/token-trailing-marker"
+mkdir -p "$TOKEN_TRAILING_BIN"
+cat >"$TOKEN_TRAILING_BIN/curl" <<EOF
+#!/usr/bin/env bash
+printf 'called\n' >"$TOKEN_TRAILING_MARKER"
+printf 'not-json\n'
+EOF
+chmod +x "$TOKEN_TRAILING_BIN/curl"
+TRAILING_BAD_TOKEN=$'bad-token\n'
+run_side_effect_with_env_and_path_and_token "/dev/null" "" "$TOKEN_TRAILING_BIN" "$TRAILING_BAD_TOKEN" '{"model":{"display_name":"Opus 4.6"},"workspace":{"project_dir":"'"$PWD"'"},"context_window":{"used_percentage":20,"context_window_size":200000},"cost":{"total_cost_usd":1.23}}'
+assert_missing_path "trailing newline token does not invoke curl" "$TOKEN_TRAILING_MARKER"
 
 # ── Summary ──
 echo ""

@@ -213,7 +213,7 @@ else
   # Check in order: env var → macOS Keychain → credentials file → secret-tool (Linux).
   _get_token() {
     [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] && {
-      echo "$CLAUDE_CODE_OAUTH_TOKEN"
+      printf '%s' "$CLAUDE_CODE_OAUTH_TOKEN"
       return
     }
     local b=""
@@ -222,18 +222,28 @@ else
     [ -z "$b" ] && [ -f ~/.claude/.credentials.json ] && b=$(<~/.claude/.credentials.json)
     [ -z "$b" ] && command -v secret-tool >/dev/null &&
       b=$(timeout 2 secret-tool lookup service "Claude Code-credentials" 2>/dev/null)
-    [ -n "$b" ] && jq -r '.claudeAiOauth.accessToken//empty' <<<"$b" 2>/dev/null
+    [ -n "$b" ] && jq -j '.claudeAiOauth.accessToken//empty' <<<"$b" 2>/dev/null
   }
 
   # ── _fetch_usage_api: direct API read into usage globals ──
   # Used by both the cached background refresh path and the no-cache fallback.
   _fetch_usage_api() {
     local tk resp
-    tk=$(_get_token)
+    # Command substitution strips trailing newlines. Append a sentinel byte only
+    # on success so malformed tokens with a trailing LF remain detectable here.
+    tk=$(_get_token && printf '\001') || return 1
+    [[ "$tk" == *$'\001' ]] || return 1
+    tk=${tk%$'\001'}
     [ -n "$tk" ] || return 1
+    # OAuth bearer tokens must remain a single header line. Reject malformed
+    # credentials up front instead of letting curl parse injected CR/LF bytes.
+    case "$tk" in *$'\n'* | *$'\r'*) return 1 ;; esac
+    # Feed headers through process substitution so the bearer token stays out
+    # of curl argv while preserving literal bytes like quotes and backslashes.
     resp=$(curl -s --max-time 3 \
-      -H "Authorization: Bearer $tk" -H "anthropic-beta: oauth-2025-04-20" \
-      -H "Content-Type: application/json" \
+      -H @<(printf 'Authorization: Bearer %s\n' "$tk"
+        printf '%s\n' 'anthropic-beta: oauth-2025-04-20'
+        printf '%s\n' 'Content-Type: application/json') \
       "https://api.anthropic.com/api/oauth/usage" 2>/dev/null)
     IFS=$'\t' read -r U5 U7 XO XU XL RM5 RM7 < <(jq -r '
       def rmins: if . and . != "" then (sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | fromdateiso8601) - (now|floor) | ./60|floor | if .<0 then 0 else . end else null end;
