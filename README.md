@@ -95,10 +95,6 @@ On Claude Code >= 2.1.80, usage data comes directly from stdin. No network calls
 
 Cache files live in a private per-user directory (`$XDG_RUNTIME_DIR/claude-pace` or `~/.cache/claude-pace`, mode 700). All cache reads are validated before use. No files are ever written to shared `/tmp`.
 
-## Known Issues
-
-**Statusline compressed by notification banners** ([claude-code#27305](https://github.com/anthropics/claude-code/issues/27305)). Workaround: add `"DISABLE_COST_WARNINGS": "1"` to `env` in `~/.claude/settings.json`, then restart.
-
 ## Also by the Author
 
 [**diffpane**](https://github.com/Astro-Han/diffpane) - Real-time TUI diff viewer for AI coding agents. See what Claude Code changes as it happens.
