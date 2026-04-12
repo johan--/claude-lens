@@ -120,7 +120,11 @@ assert_line "no (0K) in model" 1 '^Opus 4\.6 [^(]'
 # ── Test 4: Branch in parentheses ──
 echo "Test 4: branch format"
 OUTPUT=$(run '{"model":{"display_name":"Opus 4.6 (1M context)"},"workspace":{"project_dir":"'"$PWD"'"},"context_window":{"used_percentage":16,"context_window_size":1000000},"rate_limits":{"five_hour":{"used_percentage":17,"resets_at":'$((NOW + 2580))'},"seven_day":{"used_percentage":21,"resets_at":'$((NOW + 345600))'}}}')
-assert_line "branch in parens ($CURRENT_BRANCH)" 1 "\\($CURRENT_BRANCH\\)"
+if [[ -n "$CURRENT_BRANCH" ]]; then
+  assert_line "branch in parens ($CURRENT_BRANCH)" 1 "\\($CURRENT_BRANCH\\)"
+else
+  assert_line "no branch suffix in detached HEAD" 1 "\\|  $REPO_NAME$"
+fi
 assert_line "project name only" 1 "$REPO_NAME"
 
 # ── Test 5: Pipe alignment ──
