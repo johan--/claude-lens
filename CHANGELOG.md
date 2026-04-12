@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.0
 
 - Remove the Anthropic Usage API fallback, quota tracking now reads only from stdin `rate_limits`
 - Quota tracking now requires Claude Code `2.1.80+`; when `rate_limits` is absent, claude-pace shows `--` for quota and may still show session cost
