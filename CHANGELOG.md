@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.1
 
 - Reuse the last known stdin quota snapshot when `rate_limits` is absent, as long as both cached reset times are still in the future
 - Ignore invalid, expired, or partial-live quota snapshots instead of overwriting a previously good cache
