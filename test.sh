@@ -12,39 +12,51 @@ cleanup_test_artifacts() {
 }
 trap cleanup_test_artifacts EXIT
 
-assert_line() {
-  local name="$1" line_num="$2" pattern="$3" actual
-  actual=$(echo "$OUTPUT" | sed -n "${line_num}p")
+OUTPUT=""
+
+output_line() {
+  local line_num="$1"
+  printf '%s\n' "$OUTPUT" | sed -n "${line_num}p"
+}
+
+assert_line_match() {
+  local name="$1" line_num="$2" pattern="$3" expect_match="$4" actual matched
+  actual=$(output_line "$line_num")
   if [[ "$actual" =~ $pattern ]]; then
+    matched=1
+  else
+    matched=0
+  fi
+  if [[ "$matched" == "$expect_match" ]]; then
     PASS=$((PASS + 1))
     echo "  PASS: $name"
   else
     FAIL=$((FAIL + 1))
     echo "  FAIL: $name"
-    echo "    expected pattern: $pattern"
-    echo "    actual:           $actual"
+    if [[ "$expect_match" == "1" ]]; then
+      echo "    expected pattern: $pattern"
+      echo "    actual:           $actual"
+    else
+      echo "    unexpected pattern: $pattern"
+      echo "    actual:             $actual"
+    fi
   fi
 }
 
+assert_line() {
+  assert_line_match "$1" "$2" "$3" 1
+}
+
 assert_line_not() {
-  local name="$1" line_num="$2" pattern="$3" actual
-  actual=$(echo "$OUTPUT" | sed -n "${line_num}p")
-  if [[ ! "$actual" =~ $pattern ]]; then
-    PASS=$((PASS + 1))
-    echo "  PASS: $name"
-  else
-    FAIL=$((FAIL + 1))
-    echo "  FAIL: $name"
-    echo "    unexpected pattern: $pattern"
-    echo "    actual:             $actual"
-  fi
+  assert_line_match "$1" "$2" "$3" 0
 }
 
 # Pipe alignment check: | must be at same column on both lines
 assert_aligned() {
   local name="$1"
   local col1 col2 l1 l2
-  l1=$(echo "$OUTPUT" | sed -n '1p') l2=$(echo "$OUTPUT" | sed -n '2p')
+  l1=$(output_line 1)
+  l2=$(output_line 2)
   col1=${l1%%|*} col2=${l2%%|*}
   col1=${#col1} col2=${#col2}
   if [[ "$col1" == "$col2" ]]; then
@@ -107,6 +119,12 @@ git_cache_path_for_dir() {
 quota_cache_path_for_root() {
   local cache_root="$1"
   printf '%s/claude-sl-quota\n' "$cache_root"
+}
+
+run_without_safe_cache_root() {
+  local input="$1"
+  env HOME="/dev/null" XDG_RUNTIME_DIR="" USER=tester PATH="$PATH" \
+    bash claude-pace.sh 2>/dev/null <<<"$input"
 }
 
 init_test_repo() {
@@ -434,18 +452,16 @@ assert_line "empty stdin prints Claude" 1 '^Claude$'
 
 # ── Test 29: No safe cache root skips quota cache writes ──
 echo "Test 29: no safe cache root skips quota cache"
-OUTPUT=$(env HOME="/dev/null" XDG_RUNTIME_DIR="" USER=tester PATH="$PATH" \
-  bash claude-pace.sh 2>/dev/null <<<"$(
-    cat <<JSON
+OUTPUT=$(run_without_safe_cache_root "$(
+  cat <<JSON
 {"model":{"display_name":"Opus 4.6"},"workspace":{"project_dir":"$PWD"},"context_window":{"used_percentage":20,"context_window_size":200000},"rate_limits":{"five_hour":{"used_percentage":30,"resets_at":$((NOW + 12000))},"seven_day":{"used_percentage":15,"resets_at":$((NOW + 500000))}}}
 JSON
-  )" | strip_ansi)
-OUTPUT=$(env HOME="/dev/null" XDG_RUNTIME_DIR="" USER=tester PATH="$PATH" \
-  bash claude-pace.sh 2>/dev/null <<<"$(
-    cat <<JSON
+)" | strip_ansi)
+OUTPUT=$(run_without_safe_cache_root "$(
+  cat <<JSON
 {"model":{"display_name":"Opus 4.6"},"workspace":{"project_dir":"$PWD"},"context_window":{"used_percentage":20,"context_window_size":200000},"cost":{"total_cost_usd":1.23}}
 JSON
-  )" | strip_ansi)
+)" | strip_ansi)
 assert_line "no safe cache root keeps 5h --" 2 '5h --'
 assert_line "no safe cache root keeps session cost" 2 '\$1\.23'
 
@@ -466,6 +482,47 @@ OUTPUT=$(run_with_env "$NULL_HOME" "$NULL_RUNTIME" '{"model":{"display_name":"Op
 assert_line "empty-object rate_limits shows 5h --" 2 '5h --'
 assert_line "empty-object rate_limits shows 7d --" 2 '7d --'
 assert_line_not "empty-object rate_limits suppresses session cost" 2 '\$1\.23'
+
+# ── Test 32: Live quota rewrite normalizes symlink cache file ──
+echo "Test 32: live quota rewrite replaces symlink quota cache"
+SYMLINK_QUOTA_HOME="$TEST_TMP/symlink-quota-home"
+SYMLINK_QUOTA_RUNTIME="$TEST_TMP/symlink-quota-runtime"
+SYMLINK_QUOTA_ROOT="$SYMLINK_QUOTA_RUNTIME/claude-pace"
+mkdir -p "$SYMLINK_QUOTA_HOME" "$SYMLINK_QUOTA_RUNTIME" "$SYMLINK_QUOTA_ROOT"
+printf '30|15|9999999999|9999999999\n' >"$TEST_TMP/real-quota-cache"
+ln -s "$TEST_TMP/real-quota-cache" "$(quota_cache_path_for_root "$SYMLINK_QUOTA_ROOT")"
+run_side_effect_with_env "$SYMLINK_QUOTA_HOME" "$SYMLINK_QUOTA_RUNTIME" '{"model":{"display_name":"Opus 4.6"},"workspace":{"project_dir":"'"$PWD"'"},"context_window":{"used_percentage":20,"context_window_size":200000},"rate_limits":{"five_hour":{"used_percentage":30,"resets_at":9999999999},"seven_day":{"used_percentage":15,"resets_at":9999999999}}}'
+if [[ -L "$(quota_cache_path_for_root "$SYMLINK_QUOTA_ROOT")" ]]; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: live quota rewrite replaces symlink quota cache"
+else
+  PASS=$((PASS + 1))
+  echo "  PASS: live quota rewrite replaces symlink quota cache"
+fi
+
+# ── Test 33: Unreadable quota cache does not leak stderr on live path ──
+echo "Test 33: unreadable quota cache stays silent on live path"
+UNREADABLE_QUOTA_HOME="$TEST_TMP/unreadable-quota-home"
+UNREADABLE_QUOTA_RUNTIME="$TEST_TMP/unreadable-quota-runtime"
+UNREADABLE_QUOTA_ROOT="$UNREADABLE_QUOTA_RUNTIME/claude-pace"
+UNREADABLE_QUOTA_ERR="$TEST_TMP/unreadable-quota.err"
+mkdir -p "$UNREADABLE_QUOTA_HOME" "$UNREADABLE_QUOTA_RUNTIME" "$UNREADABLE_QUOTA_ROOT"
+printf '30|15|9999999999|9999999999\n' >"$(quota_cache_path_for_root "$UNREADABLE_QUOTA_ROOT")"
+chmod 000 "$(quota_cache_path_for_root "$UNREADABLE_QUOTA_ROOT")"
+env HOME="$UNREADABLE_QUOTA_HOME" XDG_RUNTIME_DIR="$UNREADABLE_QUOTA_RUNTIME" USER=tester PATH="$PATH" \
+  bash claude-pace.sh >/dev/null 2>"$UNREADABLE_QUOTA_ERR" <<JSON
+{"model":{"display_name":"Opus 4.6"},"workspace":{"project_dir":"$PWD"},"context_window":{"used_percentage":20,"context_window_size":200000},"rate_limits":{"five_hour":{"used_percentage":30,"resets_at":9999999999},"seven_day":{"used_percentage":15,"resets_at":9999999999}}}
+JSON
+chmod 600 "$(quota_cache_path_for_root "$UNREADABLE_QUOTA_ROOT")"
+if [[ ! -s "$UNREADABLE_QUOTA_ERR" ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: unreadable quota cache stays silent on live path"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: unreadable quota cache stays silent on live path"
+  echo "    stderr:"
+  sed 's/^/    /' "$UNREADABLE_QUOTA_ERR"
+fi
 
 # ── Summary ──
 echo ""

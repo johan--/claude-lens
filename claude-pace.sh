@@ -65,6 +65,17 @@ _write_cache_record() {
     printf '%s\n' "$*"
   ) >"$tmp" && mv "$tmp" "$path"
 }
+# Avoids rewriting the quota cache when the live snapshot is unchanged.
+_write_quota_snapshot_if_changed() {
+  local path="$1" u5="$2" u7="$3" r5="$4" r7="$5"
+  if [ -f "$path" ] && [ ! -L "$path" ] && [ -r "$path" ] && _load_cache_record_file "$path"; then
+    [[ "${CACHE_FIELDS[0]:-}" == "$u5" ]] &&
+      [[ "${CACHE_FIELDS[1]:-}" == "$u7" ]] &&
+      [[ "${CACHE_FIELDS[2]:-}" == "$r5" ]] &&
+      [[ "${CACHE_FIELDS[3]:-}" == "$r7" ]] && return 0
+  fi
+  _write_cache_record "$path" "$u5" "$u7" "$r5" "$r7"
+}
 # Computes remaining whole minutes until a future epoch. Missing or expired
 # timestamps return an empty string so callers can skip countdown formatting.
 _minutes_until() {
@@ -214,7 +225,7 @@ if [[ "$HAS_RL" == "1" ]]; then
   RM5=$(_minutes_until "$R5")
   RM7=$(_minutes_until "$R7")
   if [[ -n "$QC" ]] && _valid_quota_snapshot "$U5" "$U7" "$R5" "$R7"; then
-    _write_cache_record "$QC" "$U5" "$U7" "$R5" "$R7" || true
+    _write_quota_snapshot_if_changed "$QC" "$U5" "$U7" "$R5" "$R7" || true
   fi
 else
   U5="--" U7="--" RM5="" RM7=""
