@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.2
+
+- Avoid rewriting the quota cache when the live stdin snapshot is unchanged
+- Keep quota cache hardening intact for symlinked or unreadable cache files while preserving atomic rewrite fallback
+- Simplify test helpers and add regression coverage for symlinked and unreadable quota cache files on the live path
+
 ## 0.8.1
 
 - Reuse the last known stdin quota snapshot when `rate_limits` is absent, as long as both cached reset times are still in the future
