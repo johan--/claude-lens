@@ -15,7 +15,7 @@ The cache stores the last successful stdin quota values:
 - `R5`
 - `R7`
 
-When live quota data is present, the script renders it as it does today and refreshes the cache only from a fully valid snapshot. When `rate_limits` is absent, the script reads the cached quota and renders it exactly like live quota. If the cache is missing or invalid, the script keeps the current no-quota fallback behavior, including session cost when available.
+When live quota data is present, the script renders it as it does today and refreshes the cache only from a fully valid snapshot. When `rate_limits` is absent, the script reads the cached quota and renders it exactly like live quota only when the cached reset epochs are still in the future. If the cache is missing, invalid, or already past reset, the script keeps the current no-quota fallback behavior, including session cost when available.
 
 Empty stdin remains unchanged and continues to render `Claude`.
 
@@ -44,15 +44,19 @@ When `HAS_RL=1`:
 - Render quota exactly as today
 - Compute countdowns from live `resets_at`
 - Overwrite the last-known quota cache with `U5/U7/R5/R7` only if all four fields validate for cache storage
-- If live `rate_limits` is partial or malformed, keep rendering the current run as best-effort live data but do not overwrite a previously good cache
+- If live `rate_limits` is partial or malformed, keep rendering the current run using only the live fields that are present
+- Missing live fields remain `--`
+- Do not backfill missing live fields from cache
+- Suppress session cost for that run, matching current `HAS_RL=1` behavior
+- Do not overwrite a previously good cache from a partial or malformed live snapshot
 
 ### Case 2: `rate_limits` absent
 
 When `HAS_RL=0`:
 
 - Attempt to read the last-known quota cache
-- If the cache is valid, render it exactly like live quota and suppress session cost
-- If the cache is missing, unreadable, or invalid, keep the current no-quota fallback, including session cost when available
+- If the cache is valid and its cached `R5/R7` are still in the future, render it exactly like live quota and suppress session cost
+- If the cache is missing, unreadable, invalid, or already past reset, keep the current no-quota fallback, including session cost when available
 
 Cached quota is intentionally rendered without any stale marker. This is a deliberate simplicity tradeoff.
 
@@ -106,7 +110,7 @@ No new cache abstraction should be introduced.
 - Write quota cache only when `HAS_RL=1` and all four cache fields validate
 - Read quota cache only when `HAS_RL=0`
 - If cache write fails, ignore the failure and keep rendering live data
-- If cache read fails or fields are invalid, fall back to `--`
+- If cache read fails, fields are invalid, or cached reset epochs are expired, fall back to `--`
 - On cache hit, suppress session cost so cached quota renders the same way as live quota
 - On cache miss or invalid cache, preserve the current session-cost behavior
 
@@ -118,6 +122,8 @@ After reading the quota cache:
 
 - `U5` and `U7` must be validated as numeric percentages before they enter quota formatting logic
 - `R5` and `R7` must be validated as numeric epoch values before converting to remaining minutes
+- cached `R5` and `R7` must still be greater than `NOW`
+- If either cached reset epoch is already expired, treat the entire cache snapshot as invalid for fallback rendering
 
 Before writing the quota cache:
 
@@ -130,7 +136,7 @@ If any required field is invalid:
 - Ignore the cache
 - Fall back to `U5="--" U7="--" RM5="" RM7=""`
 
-Do not add repair logic, migration logic, or partial-cache recovery logic beyond the existing compatibility reader.
+Do not add repair logic, migration logic, partial-cache recovery logic, or cache backfill beyond the existing compatibility reader.
 
 ## Implementation Boundaries
 
@@ -159,10 +165,14 @@ Add tests for the following:
 3. Invalid quota cache contents:
    the script ignores the cache and degrades to the current no-quota fallback.
 4. Seed a good quota cache, then provide partial or malformed live `rate_limits`:
-   the script must not overwrite the good cache, and a later missing-`rate_limits` run still uses the older valid cache.
-5. Empty stdin:
+   the current run must render only the live fields that are present, missing live fields must remain `--`, session cost must stay suppressed, and the good cache must not be overwritten.
+5. Seed a good quota cache, then provide a later missing-`rate_limits` run:
+   the script still uses the older valid cache.
+6. Cached reset epochs already at or before `NOW`:
+   the cached snapshot is treated as invalid and the script degrades to the current no-quota fallback.
+7. Empty stdin:
    output remains `Claude`, not cached quota.
-6. No safe cache root:
+8. No safe cache root:
    quota cache read/write is skipped and behavior degrades cleanly.
 
 ## Tradeoff
@@ -170,6 +180,7 @@ Add tests for the following:
 This design accepts one intentional tradeoff:
 
 - cached quota may be stale if the same account is used elsewhere or quota changes outside the current local Claude Code flow
+- cached quota is still only accepted before its own reset boundary; once the cached reset time has passed, the snapshot is discarded instead of rendered
 
 That tradeoff is acceptable because the goal is continuity with minimal complexity, not a global source of truth.
 
@@ -181,5 +192,7 @@ That tradeoff is acceptable because the goal is continuity with minimal complexi
 - Missing `rate_limits` can render the last known quota from stdin
 - Empty stdin behavior remains unchanged
 - Partial or malformed live `rate_limits` cannot poison a previously good cache
+- Partial live `rate_limits` render only their present live fields, do not backfill from cache, and suppress session cost
 - Cache-hit rendering suppresses session cost; cache-miss rendering preserves current session-cost fallback behavior
+- Cached reset epochs at or before `NOW` are treated as invalid for fallback rendering
 - Invalid cache data cannot break rendering or arithmetic paths
